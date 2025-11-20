@@ -2,10 +2,11 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import { app, server } from "./SocketIO/server.js";
 import express from "express";
-configDotenv();
 import cors from "cors";
 import databaseConnection from "./database/database.js";
 import userRoute from "./routes/userRoute.js"
+import videoRoute from "./routes/videoRoute.js"
+
 dotenv.config({
     path: ".env"
 });
@@ -27,8 +28,9 @@ databaseConnection();
 
 // Routes
 app.use("/api/user", userRoute);
+app.use("/api/video", videoRoute);
 
-const PORT = process.env.PORT || 8080;
+const PORT = 5000;
 
 server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);

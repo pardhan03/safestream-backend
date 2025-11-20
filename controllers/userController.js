@@ -1,4 +1,4 @@
-import { User } from "../models/userModel.js";
+import { User } from "../models/user.modal.js";
 import bcryptjs from "bcryptjs";
 import jwt from "jsonwebtoken";
 
@@ -15,9 +15,7 @@ export const Register = async (req, res) => {
         if (user) {
             return res.status(400).json({ message: "Email already exists", success: false });
         }
-        // 3. Hash Password
         const hashedPassword = await bcryptjs.hash(password, 10);
-        // 4. Create User
         const newUser = await User.create({
             fullname,
             email,
@@ -25,7 +23,6 @@ export const Register = async (req, res) => {
             role: "Editor"
         });
 
-        // 5. Generate Token (Auto-login after register)
         const token = jwt.sign({ userId: newUser._id }, process.env.TOKEN_SECRET, { expiresIn: '1d' });
 
         return res.status(201).cookie("token", token, {
@@ -63,18 +60,16 @@ export const Login = async (req, res) => {
         if (!isMatch) {
             return res.status(400).json({ message: "Incorrect email or password", success: false });
         }
-        // 4. Generate Token
         const token = jwt.sign({ userId: user._id }, process.env.TOKEN_SECRET, { expiresIn: '1d' });
 
-        // 5. Send Cookie
         return res.status(200).cookie("token", token, {
             httpOnly: true,
             sameSite: 'strict',
-            maxAge: 24 * 60 * 60 * 1000 
+            maxAge: 24 * 60 * 60 * 1000
         }).json({
             message: `Welcome back ${user.fullname}`,
             success: true,
-            token: token, // Sending token in body too, just in case frontend needs it for localstorage
+            token: token,
             user: {
                 _id: user._id,
                 fullname: user.fullname,
