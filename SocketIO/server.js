@@ -12,6 +12,7 @@ const io = new Server(server, {
     credentials: true
   },
 });
+app.set("io", io);
 
 export const getReceiverSocketId = (receiverId) => {
   return users[receiverId];
@@ -20,25 +21,10 @@ export const getReceiverSocketId = (receiverId) => {
 const users = {};
 
 io.on("connection", (socket) => {
-  // console.log("a user connected", socket.id);
-  const userId = socket.handshake.query.userId;
-  if (userId) {
-    users[userId] = socket.id;
-    // console.log("Hello ", users);
-  }
-
   socket.on("join", (userId) => {
-    if (userId) {
-      socket.join(String(userId));
-      console.log(`Socket ${socket.id} joined room ${userId}`);
-    }
-  });
-
-  io.emit("getOnlineUsers", Object.keys(users));
-
-  socket.on("disconnect", () => {
-    delete users[userId];
-    io.emit("getOnlineUsers", Object.keys(users));
+    const roomId = String(userId);
+    socket.join(roomId);
+    console.log("Joined room:", roomId);
   });
 });
 

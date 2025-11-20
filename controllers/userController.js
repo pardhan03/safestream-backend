@@ -84,6 +84,30 @@ export const Login = async (req, res) => {
     }
 };
 
+export const changePassword = async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    const userId = req.user.id;  // comes from secureRoute middleware
+
+    if (!newPassword) {
+      return res.status(400).json({ message: "New password required." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await User.findByIdAndUpdate(userId, { password: hashedPassword });
+
+    res.status(200).json({
+      message: "Password updated successfully.",
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      message: "Server error while changing password.",
+    });
+  }
+};
+
 export const logout = (req, res) => {
     try {
         return res.status(200).cookie("token", "", { maxAge: 0 }).json({

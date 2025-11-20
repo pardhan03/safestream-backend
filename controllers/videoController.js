@@ -1,13 +1,22 @@
 import { Video } from "../models/video.model.js";
-
 import fs from "fs";
 import path from "path";
 import mime from "mime-types";
 import { v4 as uuidv4 } from "uuid";
+import { compressVideo } from "../utils/compressVideo.js";
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads", "videos");
 
-// Simulated processing: update progress, set sensitivity result, emit socket events
+// Simple in-memory streaming cache for recent chunks (small-scale)
+const streamCache = new Map(); // key -> { chunk: Buffer, headers, expiresAt }
+const CACHE_TTL_MS = 60 * 1000; // keep cached chunk for 60s
+
+const setCache = (key, data) => {
+  streamCache.set(key, data);
+  setTimeout(() => streamCache.delete(key), CACHE_TTL_MS);
+};
+
+// Simulated processing with compression step
 const simulateProcessing = async (videoDoc, io) => {
   try {
     videoDoc.status = "processing";
@@ -16,7 +25,7 @@ const simulateProcessing = async (videoDoc, io) => {
 
     let progress = 0;
     const interval = setInterval(async () => {
-      progress += Math.floor(Math.random() * 15) + 5; // bump
+      progress += Math.floor(Math.random() * 15) + 5;
       if (progress >= 100) progress = 100;
 
       videoDoc.progress = progress;
@@ -31,14 +40,34 @@ const simulateProcessing = async (videoDoc, io) => {
       if (progress === 100) {
         clearInterval(interval);
 
-        const flagged = Math.random() < 0.12; // 12% flagged
+        // compress the video into multiple qualities
+        try {
+          const inputPath = videoDoc.path;
+          const filenameBase = `${Date.now()}-${uuidv4()}-${videoDoc.filename}`;
+          const outputDir = path.join(path.dirname(inputPath), "compressed");
+          const compressedResult = await compressVideo(inputPath, outputDir, filenameBase);
+
+          // Save compressed file paths in DB
+          videoDoc.compressed = {
+            p360: compressedResult?.p360 || null,
+            p720: compressedResult?.p720 || null,
+            p1080: compressedResult?.p1080 || null
+          };
+
+        } catch (compressErr) {
+          console.error("Compression error:", compressErr);
+          // keep processing but mark failed compression
+        }
+
+        // Simulate sensitivity classification
+        const flagged = Math.random() < 0.12; // 12% chance
         videoDoc.sensitivity = flagged ? "flagged" : "safe";
         videoDoc.status = flagged ? "failed" : "completed";
         videoDoc.progress = 100;
         await videoDoc.save();
 
-        if (io) io.to(String(videoDoc.user)).emit("video:completed", {
-          videoId: videoDoc._id,
+        io.to(String(videoDoc.user)).emit("video:completed", {
+          videoId: String(videoDoc._id),
           status: videoDoc.status,
           sensitivity: videoDoc.sensitivity
         });
@@ -68,7 +97,7 @@ export const uploadVideoController = async (req, res) => {
     const io = req.app.get("io");
     if (io) io.to(String(req.user._id)).emit("video:uploaded", { videoId: video._id });
 
-    // Kick off simulated processing (in-proc). Replace with worker for production.
+    // Kick off processing+compression (non-blocking)
     simulateProcessing(video, io);
 
     return res.status(201).json({ success: true, video });
@@ -78,15 +107,6 @@ export const uploadVideoController = async (req, res) => {
   }
 };
 
-/**
- * GET /api/video/all
- * Optional query params:
- *   - page (default 1)
- *   - limit (default 20)
- *   - status (processing/completed/failed/...)
- *   - sensitivity (safe/flagged/unknown)
- *   - q (search originalName)
- */
 export const getAllVideos = async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
@@ -112,7 +132,7 @@ export const getAllVideos = async (req, res) => {
       videos
     });
   } catch (err) {
-    console.error("getAllVideosController:", err);
+    console.error("getAllVideos:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
@@ -120,17 +140,25 @@ export const getAllVideos = async (req, res) => {
 /**
  * Streaming endpoint
  * GET /api/video/stream/:id
+ * Accepts optional query param `q` values: original | p360 | p720 | p1080
  */
 export const streamVideoController = async (req, res) => {
   try {
     const vid = await Video.findById(req.params.id);
     if (!vid) return res.status(404).json({ success: false, message: "Video not found" });
 
+    // Permission: owner or non-Viewer roles allowed
     if (String(vid.user) !== String(req.user._id) && req.user.role === "Viewer") {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const filePath = vid.path || path.join(UPLOAD_DIR, vid.filename);
+    // Determine which file path to stream based on query
+    const quality = req.query.q || "original"; // default original
+    let filePath = vid.path;
+    if (quality === "p360" && vid.compressed?.p360) filePath = vid.compressed.p360;
+    if (quality === "p720" && vid.compressed?.p720) filePath = vid.compressed.p720;
+    if (quality === "p1080" && vid.compressed?.p1080) filePath = vid.compressed.p1080;
+
     if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, message: "File missing" });
 
     const stat = fs.statSync(filePath);
@@ -138,6 +166,7 @@ export const streamVideoController = async (req, res) => {
     const range = req.headers.range;
     const contentType = vid.mimeType || mime.lookup(filePath) || "video/mp4";
 
+    // Streaming with simple chunk-level cache
     if (range) {
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10) || 0;
@@ -147,18 +176,44 @@ export const streamVideoController = async (req, res) => {
         return;
       }
       const chunkSize = (end - start) + 1;
-      const stream = fs.createReadStream(filePath, { start, end });
-      res.writeHead(206, {
+
+      const cacheKey = `${vid._id}:${quality}:${start}-${end}`;
+      if (streamCache.has(cacheKey)) {
+        const cached = streamCache.get(cacheKey);
+        // renew TTL by re-setting
+        setCache(cacheKey, cached);
+        res.writeHead(206, cached.headers);
+        return res.end(cached.chunk);
+      }
+
+      const headers = {
         "Content-Range": `bytes ${start}-${end}/${fileSize}`,
         "Accept-Ranges": "bytes",
         "Content-Length": chunkSize,
         "Content-Type": contentType,
+        "Cache-Control": "public, max-age=86400"
+      };
+
+      const stream = fs.createReadStream(filePath, { start, end });
+      const buffers = [];
+      stream.on("data", (b) => buffers.push(b));
+      stream.on("end", () => {
+        const chunk = Buffer.concat(buffers);
+        // store in short-lived memory cache
+        setCache(cacheKey, { chunk, headers });
+        res.writeHead(206, headers);
+        res.end(chunk);
       });
-      stream.pipe(res);
+      stream.on("error", (err) => {
+        console.error("stream error", err);
+        res.status(500).end();
+      });
     } else {
+      // Full file (no range)
       res.writeHead(200, {
         "Content-Length": fileSize,
-        "Content-Type": contentType
+        "Content-Type": contentType,
+        "Cache-Control": "public, max-age=86400"
       });
       fs.createReadStream(filePath).pipe(res);
     }
@@ -166,4 +221,24 @@ export const streamVideoController = async (req, res) => {
     console.error("streamVideoController:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
+};
+
+export const deleteVideo = async (req, res) => {
+  const { id } = req.params;
+  const video = await Video.findById(id);
+
+  if (!video) return res.status(404).json({ message: "Not found" });
+  console.log(req.user.role !== "Admin", video._id.toString(), req.user._id)
+  if (req.user.role !== "Admin" && video.user.toString() !== req.user._id.toString()){
+    return res.status(403).json({ message: "Unauthorized" });
+  }
+
+  fs.unlinkSync(video.path); // delete from storage
+  if (video.compressed?.p360) fs.unlinkSync(video.compressed.p360);
+  if (video.compressed?.p720) fs.unlinkSync(video.compressed.p720);
+  if (video.compressed?.p1080) fs.unlinkSync(video.compressed.p1080);
+
+  await video.deleteOne();
+
+  res.json({ message: "Video deleted" });
 };
