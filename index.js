@@ -35,3 +35,7 @@ const PORT = 5000;
 server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
 });
+
+app.get("/", (req, res) => {
+  res.send("SafeStream backend is running!");
+});
