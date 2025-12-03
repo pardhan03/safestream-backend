@@ -25,13 +25,10 @@ export const Register = async (req, res) => {
 
         const token = jwt.sign({ userId: newUser._id }, process.env.TOKEN_SECRET, { expiresIn: '1d' });
 
-        return res.status(201).cookie("token", token, {
-            httpOnly: true,
-            sameSite: 'strict',
-            maxAge: 24 * 60 * 60 * 1000 // 1 day
-        }).json({
+        return res.status(201).json({
             message: "Account created successfully",
             success: true,
+            token,
             user: {
                 _id: newUser._id,
                 fullname: newUser.fullname,
@@ -62,14 +59,10 @@ export const Login = async (req, res) => {
         }
         const token = jwt.sign({ userId: user._id }, process.env.TOKEN_SECRET, { expiresIn: '1d' });
 
-        return res.status(200).cookie("token", token, {
-            httpOnly: true,
-            sameSite: 'strict',
-            maxAge: 24 * 60 * 60 * 1000
-        }).json({
+        return res.status(200).json({
             message: `Welcome back ${user.fullname}`,
             success: true,
-            token: token,
+            token,
             user: {
                 _id: user._id,
                 fullname: user.fullname,
@@ -85,36 +78,42 @@ export const Login = async (req, res) => {
 };
 
 export const changePassword = async (req, res) => {
-  try {
-    const { newPassword } = req.body;
-    const userId = req.user.id;  // comes from secureRoute middleware
+    try {
+        const { newPassword } = req.body;
+        const userId = req.user._id; // comes from secureRoute middleware
 
-    if (!newPassword) {
-      return res.status(400).json({ message: "New password required." });
+        if (!newPassword) {
+            return res.status(400).json({ message: "New password required.", success: false });
+        }
+
+        const hashedPassword = await bcryptjs.hash(newPassword, 10);
+
+        await User.findByIdAndUpdate(userId, { password: hashedPassword });
+
+        res.status(200).json({
+            message: "Password updated successfully.",
+            success: true
+        });
+
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({
+            message: "Server error while changing password.",
+            success: false
+        });
     }
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    await User.findByIdAndUpdate(userId, { password: hashedPassword });
-
-    res.status(200).json({
-      message: "Password updated successfully.",
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      message: "Server error while changing password.",
-    });
-  }
 };
 
 export const logout = (req, res) => {
     try {
-        return res.status(200).cookie("token", "", { maxAge: 0 }).json({
+        // With localStorage-based auth, logout is handled on the client side
+        // This endpoint just confirms the logout action
+        return res.status(200).json({
             message: "Logged out successfully",
             success: true
         });
     } catch (error) {
         console.log(error);
+        return res.status(500).json({ message: "Logout failed", success: false });
     }
 };
