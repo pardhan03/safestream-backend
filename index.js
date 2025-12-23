@@ -17,14 +17,13 @@ const corsOptions = {
     "http://localhost:5173",
     "https://serene-kelicha-ff250b.netlify.app"
   ],
-  credentials: true,
+  credentials: false,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
 };
 
 // Apply CORS first
 app.use(cors(corsOptions));
-app.options("(.*)", cors(corsOptions));
 
 // Then other middleware
 app.use(express.json());
