@@ -32,7 +32,8 @@ const simulateProcessing = async (videoDoc, io) => {
       await videoDoc.save();
 
       if (io) io.to(String(videoDoc.user)).emit("video:progress", {
-        videoId: videoDoc._id,
+        // Always emit as string (frontend stores _id as string)
+        videoId: String(videoDoc._id),
         progress,
         status: videoDoc.status
       });
@@ -95,7 +96,7 @@ export const uploadVideoController = async (req, res) => {
     });
 
     const io = req.app.get("io");
-    if (io) io.to(String(req.user._id)).emit("video:uploaded", { videoId: video._id });
+    if (io) io.to(String(req.user._id)).emit("video:uploaded", { videoId: String(video._id) });
 
     // Kick off processing+compression (non-blocking)
     simulateProcessing(video, io);
