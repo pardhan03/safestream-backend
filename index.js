@@ -13,14 +13,18 @@ dotenv.config({
 
 // CORS configuration - must be before other middleware
 const corsOptions = {
-  origin: true, // Allow all origins
+  origin: [
+    "http://localhost:5173",
+    "https://serene-kelicha-ff250b.netlify.app"
+  ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 };
 
 // Apply CORS first
 app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // Then other middleware
 app.use(express.json());

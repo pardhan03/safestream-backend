@@ -7,7 +7,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: true, // Allow all origins
+    origin: [
+      "http://localhost:5173",
+      "https://serene-kelicha-ff250b.netlify.app"
+    ],
     methods: ["GET", "POST"],
     credentials: true
   },
