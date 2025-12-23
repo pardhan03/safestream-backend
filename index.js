@@ -24,7 +24,7 @@ const corsOptions = {
 
 // Apply CORS first
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+app.options("(.*)", cors(corsOptions));
 
 // Then other middleware
 app.use(express.json());
