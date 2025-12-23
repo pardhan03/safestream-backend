@@ -17,65 +17,135 @@ const setCache = (key, data) => {
 };
 
 // Simulated processing with compression step
-const simulateProcessing = async (videoDoc, io) => {
+// const simulateProcessing = async (videoDoc, io) => {
+//   try {
+//     videoDoc.status = "processing";
+//     videoDoc.progress = 0;
+//     await videoDoc.save();
+
+//     let progress = 0;
+//     const interval = setInterval(async () => {
+//       progress += Math.floor(Math.random() * 15) + 5;
+//       if (progress >= 100) progress = 100;
+
+//       videoDoc.progress = progress;
+//       await videoDoc.save();
+
+//       if (io) io.to(String(videoDoc.user)).emit("video:progress", {
+//         // Always emit as string (frontend stores _id as string)
+//         videoId: String(videoDoc._id),
+//         progress,
+//         status: videoDoc.status
+//       });
+
+//       if (progress === 100) {
+//         clearInterval(interval);
+
+//         // compress the video into multiple qualities
+//         try {
+//           const inputPath = videoDoc.path;
+//           const filenameBase = `${Date.now()}-${uuidv4()}-${videoDoc.filename}`;
+//           const outputDir = path.join(path.dirname(inputPath), "compressed");
+//           const compressedResult = await compressVideo(inputPath, outputDir, filenameBase);
+
+//           // Save compressed file paths in DB
+//           videoDoc.compressed = {
+//             p360: compressedResult?.p360 || null,
+//             p720: compressedResult?.p720 || null,
+//             p1080: compressedResult?.p1080 || null
+//           };
+
+//         } catch (compressErr) {
+//           console.error("Compression error:", compressErr);
+//           // keep processing but mark failed compression
+//         }
+
+//         // Simulate sensitivity classification
+//         const flagged = Math.random() < 0.12; // 12% chance
+//         videoDoc.sensitivity = flagged ? "flagged" : "safe";
+//         videoDoc.status = flagged ? "failed" : "completed";
+//         videoDoc.progress = 100;
+//         await videoDoc.save();
+
+//         io.to(String(videoDoc.user)).emit("video:completed", {
+//           videoId: String(videoDoc._id),
+//           status: videoDoc.status,
+//           sensitivity: videoDoc.sensitivity
+//         });
+//       }
+//     }, 700);
+//   } catch (err) {
+//     console.error("simulateProcessing err:", err);
+//   }
+// };
+
+const simulateProcessing = async (videoId, io) => {
   try {
-    videoDoc.status = "processing";
-    videoDoc.progress = 0;
-    await videoDoc.save();
+    // Step 1: mark processing
+    await Video.findByIdAndUpdate(videoId, {
+      status: "processing",
+      progress: 1,
+    });
 
-    let progress = 0;
-    const interval = setInterval(async () => {
-      progress += Math.floor(Math.random() * 15) + 5;
-      if (progress >= 100) progress = 100;
+    // Step 2: deterministic progress updates
+    for (let progress = 10; progress <= 90; progress += 10) {
+      await new Promise((r) => setTimeout(r, 1500));
 
-      videoDoc.progress = progress;
-      await videoDoc.save();
+      const video = await Video.findByIdAndUpdate(
+        videoId,
+        { progress, status: "processing" },
+        { new: true }
+      );
 
-      if (io) io.to(String(videoDoc.user)).emit("video:progress", {
-        // Always emit as string (frontend stores _id as string)
-        videoId: String(videoDoc._id),
+      if (!video) return;
+
+      io?.to(String(video.user)).emit("video:progress", {
+        videoId: String(video._id),
         progress,
-        status: videoDoc.status
+        status: "processing",
       });
+    }
 
-      if (progress === 100) {
-        clearInterval(interval);
+    // Step 3: compression
+    const video = await Video.findById(videoId);
+    if (!video) return;
 
-        // compress the video into multiple qualities
-        try {
-          const inputPath = videoDoc.path;
-          const filenameBase = `${Date.now()}-${uuidv4()}-${videoDoc.filename}`;
-          const outputDir = path.join(path.dirname(inputPath), "compressed");
-          const compressedResult = await compressVideo(inputPath, outputDir, filenameBase);
+    try {
+      const inputPath = video.path;
+      const filenameBase = `${Date.now()}-${uuidv4()}-${video.filename}`;
+      const outputDir = path.join(path.dirname(inputPath), "compressed");
 
-          // Save compressed file paths in DB
-          videoDoc.compressed = {
-            p360: compressedResult?.p360 || null,
-            p720: compressedResult?.p720 || null,
-            p1080: compressedResult?.p1080 || null
-          };
+      const compressed = await compressVideo(
+        inputPath,
+        outputDir,
+        filenameBase
+      );
 
-        } catch (compressErr) {
-          console.error("Compression error:", compressErr);
-          // keep processing but mark failed compression
-        }
+      video.compressed = {
+        p360: compressed?.p360 || null,
+        p720: compressed?.p720 || null,
+        p1080: compressed?.p1080 || null,
+      };
+    } catch (err) {
+      console.error("Compression failed:", err);
+    }
 
-        // Simulate sensitivity classification
-        const flagged = Math.random() < 0.12; // 12% chance
-        videoDoc.sensitivity = flagged ? "flagged" : "safe";
-        videoDoc.status = flagged ? "failed" : "completed";
-        videoDoc.progress = 100;
-        await videoDoc.save();
+    // Step 4: sensitivity decision
+    const flagged = Math.random() < 0.12;
 
-        io.to(String(videoDoc.user)).emit("video:completed", {
-          videoId: String(videoDoc._id),
-          status: videoDoc.status,
-          sensitivity: videoDoc.sensitivity
-        });
-      }
-    }, 700);
+    video.status = flagged ? "failed" : "completed";
+    video.sensitivity = flagged ? "flagged" : "safe";
+    video.progress = 100;
+
+    await video.save();
+
+    io?.to(String(video.user)).emit("video:completed", {
+      videoId: String(video._id),
+      status: video.status,
+      sensitivity: video.sensitivity,
+    });
   } catch (err) {
-    console.error("simulateProcessing err:", err);
+    console.error("simulateProcessing error:", err);
   }
 };
 
@@ -99,7 +169,9 @@ export const uploadVideoController = async (req, res) => {
     if (io) io.to(String(req.user._id)).emit("video:uploaded", { videoId: String(video._id) });
 
     // Kick off processing+compression (non-blocking)
-    simulateProcessing(video, io);
+    // simulateProcessing(video, io);
+    simulateProcessing(video._id, io);
+
 
     return res.status(201).json({ success: true, video });
   } catch (err) {
