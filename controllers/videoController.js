@@ -16,69 +16,6 @@ const setCache = (key, data) => {
   setTimeout(() => streamCache.delete(key), CACHE_TTL_MS);
 };
 
-// Simulated processing with compression step
-// const simulateProcessing = async (videoDoc, io) => {
-//   try {
-//     videoDoc.status = "processing";
-//     videoDoc.progress = 0;
-//     await videoDoc.save();
-
-//     let progress = 0;
-//     const interval = setInterval(async () => {
-//       progress += Math.floor(Math.random() * 15) + 5;
-//       if (progress >= 100) progress = 100;
-
-//       videoDoc.progress = progress;
-//       await videoDoc.save();
-
-//       if (io) io.to(String(videoDoc.user)).emit("video:progress", {
-//         // Always emit as string (frontend stores _id as string)
-//         videoId: String(videoDoc._id),
-//         progress,
-//         status: videoDoc.status
-//       });
-
-//       if (progress === 100) {
-//         clearInterval(interval);
-
-//         // compress the video into multiple qualities
-//         try {
-//           const inputPath = videoDoc.path;
-//           const filenameBase = `${Date.now()}-${uuidv4()}-${videoDoc.filename}`;
-//           const outputDir = path.join(path.dirname(inputPath), "compressed");
-//           const compressedResult = await compressVideo(inputPath, outputDir, filenameBase);
-
-//           // Save compressed file paths in DB
-//           videoDoc.compressed = {
-//             p360: compressedResult?.p360 || null,
-//             p720: compressedResult?.p720 || null,
-//             p1080: compressedResult?.p1080 || null
-//           };
-
-//         } catch (compressErr) {
-//           console.error("Compression error:", compressErr);
-//           // keep processing but mark failed compression
-//         }
-
-//         // Simulate sensitivity classification
-//         const flagged = Math.random() < 0.12; // 12% chance
-//         videoDoc.sensitivity = flagged ? "flagged" : "safe";
-//         videoDoc.status = flagged ? "failed" : "completed";
-//         videoDoc.progress = 100;
-//         await videoDoc.save();
-
-//         io.to(String(videoDoc.user)).emit("video:completed", {
-//           videoId: String(videoDoc._id),
-//           status: videoDoc.status,
-//           sensitivity: videoDoc.sensitivity
-//         });
-//       }
-//     }, 700);
-//   } catch (err) {
-//     console.error("simulateProcessing err:", err);
-//   }
-// };
-
 const simulateProcessing = async (videoId, io) => {
   try {
     // Step 1: mark processing
@@ -152,7 +89,7 @@ const simulateProcessing = async (videoId, io) => {
 export const uploadVideoController = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: "No file" });
-
+    console.log('reached here', req)
     // Save db doc
     const video = await Video.create({
       user: req.user._id,
@@ -268,18 +205,13 @@ export const streamVideoController = async (req, res) => {
       };
 
       const stream = fs.createReadStream(filePath, { start, end });
-      const buffers = [];
-      stream.on("data", (b) => buffers.push(b));
-      stream.on("end", () => {
-        const chunk = Buffer.concat(buffers);
-        // store in short-lived memory cache
-        setCache(cacheKey, { chunk, headers });
-        res.writeHead(206, headers);
-        res.end(chunk);
-      });
+
+      res.writeHead(206, headers);
+      stream.pipe(res);
+
       stream.on("error", (err) => {
-        console.error("stream error", err);
-        res.status(500).end();
+        console.error(err);
+        res.end();
       });
     } else {
       // Full file (no range)
@@ -305,11 +237,16 @@ export const deleteVideo = async (req, res) => {
   if (req.user.role !== "Admin" && video.user.toString() !== req.user._id.toString()){
     return res.status(403).json({ message: "Unauthorized" });
   }
+  const safeDelete = (filePath) => {
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  };
 
-  fs.unlinkSync(video.path); // delete from storage
-  if (video.compressed?.p360) fs.unlinkSync(video.compressed.p360);
-  if (video.compressed?.p720) fs.unlinkSync(video.compressed.p720);
-  if (video.compressed?.p1080) fs.unlinkSync(video.compressed.p1080);
+  safeDelete(video.path);
+  safeDelete(video.compressed?.p360);
+  safeDelete(video.compressed?.p720);
+  safeDelete(video.compressed?.p1080);
 
   await video.deleteOne();
 

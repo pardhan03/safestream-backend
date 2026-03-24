@@ -17,9 +17,7 @@ const corsOptions = {
     "http://localhost:5173",
     "https://serene-kelicha-ff250b.netlify.app"
   ],
-  credentials: false,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  credentials: true,
 };
 
 // Apply CORS first

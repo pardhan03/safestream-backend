@@ -1,13 +1,18 @@
 import mongoose from "mongoose";
 
-// mongodb://127.0.0.1:27017/mydatabase - local database url
-// mongodb+srv://manish_db_user:ManishOP@cluster0.fhw6wrg.mongodb.net/myDatabase
+const databaseConnection = async () => {
+  try {
+    const uri = process.env.MONGO_URI;
+    if (!uri) {
+      throw new Error("MONGO_URI not defined in .env");
+    }
 
-const databaseConnection = () => {
-    mongoose.connect('mongodb+srv://manish_db_user:ManishOP@cluster0.fhw6wrg.mongodb.net/myDatabase').then(()=>{
-        console.log("Connected to mongoDB");
-    }).catch((error)=>{
-        console.log(error);
-    })
-}
+    await mongoose.connect(uri);
+    console.log("MongoDB connected");
+  } catch (error) {
+    console.error("DB connection failed:", error.message);
+    process.exit(1);
+  }
+};
+
 export default databaseConnection;
