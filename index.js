@@ -6,6 +6,7 @@ import cors from "cors";
 import databaseConnection from "./database/database.js";
 import userRoute from "./routes/userRoute.js"
 import videoRoute from "./routes/videoRoute.js"
+import adminRoute from "./routes/adminRoute.js"
 
 dotenv.config({
     path: ".env"
@@ -32,6 +33,7 @@ app.use(cookieParser());
 databaseConnection();
 
 // Routes
+app.use("/api/admin", adminRoute);
 app.use("/api/user", userRoute);
 app.use("/api/video", videoRoute);
 

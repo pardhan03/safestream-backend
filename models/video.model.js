@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 const videoSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    organizationId: { type: String, required: true, index: true },
+    assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", index: true }],
     filename: { type: String, required: true },
     originalName: { type: String, required: true },
     size: { type: Number, required: true },
@@ -20,5 +22,9 @@ const videoSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+videoSchema.index({ organizationId: 1, createdAt: -1 });
+videoSchema.index({ organizationId: 1, user: 1 });
+videoSchema.index({ organizationId: 1, assignedUsers: 1 });
 
 export const Video = mongoose.model("Video", videoSchema);

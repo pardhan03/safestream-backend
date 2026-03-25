@@ -4,6 +4,7 @@ import path from "path";
 import mime from "mime-types";
 import { v4 as uuidv4 } from "uuid";
 import { compressVideo } from "../utils/compressVideo.js";
+import { buildVideoListQueryByRole, canManageVideo, canReadVideo } from "../utils/authorization.js";
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads", "videos");
 
@@ -70,7 +71,7 @@ const simulateProcessing = async (videoId, io) => {
     // Step 4: sensitivity decision
     const flagged = Math.random() < 0.12;
 
-    video.status = flagged ? "failed" : "completed";
+    video.status = "completed";
     video.sensitivity = flagged ? "flagged" : "safe";
     video.progress = 100;
 
@@ -94,6 +95,8 @@ export const uploadVideoController = async (req, res) => {
     const video = await Video.create({
       user: req.user._id,
       filename: req.file.filename,
+      organizationId: req.user.organizationId,
+      assignedUsers: [req.user._id],
       originalName: req.file.originalname,
       size: req.file.size,
       path: req.file.path,
@@ -123,7 +126,8 @@ export const getAllVideos = async (req, res) => {
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const skip = (page - 1) * limit;
 
-    const query = { user: req.user._id }; // multi-tenant: only user's videos
+    // const query = { user: req.user._id }; // multi-tenant: only user's videos
+    const query = buildVideoListQueryByRole(req.user);
 
     if (req.query.status) query.status = req.query.status;
     if (req.query.sensitivity) query.sensitivity = req.query.sensitivity;
@@ -157,8 +161,7 @@ export const streamVideoController = async (req, res) => {
     const vid = await Video.findById(req.params.id);
     if (!vid) return res.status(404).json({ success: false, message: "Video not found" });
 
-    // Permission: owner or non-Viewer roles allowed
-    if (String(vid.user) !== String(req.user._id) && req.user.role === "Viewer") {
+    if (!canReadVideo(req.user, vid)) {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
@@ -229,26 +232,66 @@ export const streamVideoController = async (req, res) => {
 };
 
 export const deleteVideo = async (req, res) => {
-  const { id } = req.params;
-  const video = await Video.findById(id);
-
-  if (!video) return res.status(404).json({ message: "Not found" });
-  console.log(req.user.role !== "Admin", video._id.toString(), req.user._id)
-  if (req.user.role !== "Admin" && video.user.toString() !== req.user._id.toString()){
-    return res.status(403).json({ message: "Unauthorized" });
-  }
-  const safeDelete = (filePath) => {
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+  try {
+    const { id } = req.params;
+    const video = await Video.findById(id);
+    if (!video) return res.status(404).json({ message: "Not found" });
+    if (!canManageVideo(req.user, video)) {
+      return res.status(403).json({ message: "Forbidden" });
     }
-  };
+    const safeDelete = (filePath) => {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    };
+    safeDelete(video.path);
+    safeDelete(video.compressed?.p360);
+    safeDelete(video.compressed?.p720);
+    safeDelete(video.compressed?.p1080);
+    await video.deleteOne();
+    return res.json({ message: "Video deleted" });
+  } catch (err) {
+    console.error("deleteVideo:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
 
-  safeDelete(video.path);
-  safeDelete(video.compressed?.p360);
-  safeDelete(video.compressed?.p720);
-  safeDelete(video.compressed?.p1080);
+export const assignUsersToVideo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userIds = [] } = req.body;
 
-  await video.deleteOne();
+    const video = await Video.findById(id);
+    if (!video) return res.status(404).json({ message: "Video not found" });
 
-  res.json({ message: "Video deleted" });
+    if (req.user.role !== "Admin" || req.user.organizationId !== video.organizationId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    video.assignedUsers = [...new Set(userIds.map(String))];
+    await video.save();
+
+    return res.json({ success: true, video });
+  } catch (e) {
+    console.error("assignUsersToVideo:", e);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const unassignUserFromVideo = async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const video = await Video.findById(id);
+    if (!video) return res.status(404).json({ message: "Video not found" });
+
+    if (req.user.role !== "Admin" || req.user.organizationId !== video.organizationId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    video.assignedUsers = (video.assignedUsers || []).filter((u) => String(u) !== String(userId));
+    await video.save();
+
+    return res.json({ success: true, video });
+  } catch (e) {
+    console.error("unassignUserFromVideo:", e);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 };

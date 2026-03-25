@@ -22,6 +22,12 @@ const userSchema = new mongoose.Schema({
         enum: ["Viewer", "Editor", "Admin"],
         default: "Editor"
     },
+    organizationId: {
+        type: String,
+        default: "default-org",
+        index: true
+    },
+    isActive: { type: Boolean, default: true, },
     avatar: {
         type: String,
         default: ""
